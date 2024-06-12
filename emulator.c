@@ -1,25 +1,36 @@
 #include <linux/cdev.h>
+#include <linux/etherdevice.h>
 #include <linux/fs.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/netdevice.h>
+#include <linux/rtnetlink.h>
+#include <linux/skbuff.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
-#include <linux/skbuff.h>
 #include <linux/veth.h>
-#include <linux/rtnetlink.h>
-#include <linux/etherdevice.h>
 #include "queue.h"
 
 #define DEVICE_NAME "emulator"
 #define IOCTL_PING _IOR('N', 2, u64)
+#define IOCTL_ATTACH_IF _IOR('N', 3, u64)
 
-#define ENTRIES 32768
-static struct xsk_queue *rx_ring1;
+struct ring_info {
+  u64 rx_ring_size;
+  u64 rx_ring_num;
+  u64 tx_ring_size;
+  u64 tx_ring_num;
+};
+
+#define ENTRIES 4096
+#define CORE_NUM 28
+static struct xsk_queue *rx_ring1[CORE_NUM];
 static struct xsk_queue *tx_ring1;
-static struct xsk_queue *rx_ring2;
+static struct xsk_queue *rx_ring2[CORE_NUM];
 static struct xsk_queue *tx_ring2;
+static struct ring_info dev1_info;
+static struct ring_info dev2_info;
 static struct net_device *veth1;
 static struct net_device *veth2;
 
@@ -32,7 +43,8 @@ static int major;
 static struct class *netdev_class;
 static struct cdev netdev_cdev;
 
-static inline u32 xskq_cons_read_desc_batch(struct xsk_queue *q, u32 max, int tar) {
+static inline u32 xskq_cons_read_desc_batch(struct xsk_queue *q, u32 max,
+                                            int tar) {
   u32 cached_cons = q->cached_cons, nb_entries = 0;
 
   while (cached_cons != q->cached_prod && nb_entries < max) {
@@ -42,8 +54,8 @@ static inline u32 xskq_cons_read_desc_batch(struct xsk_queue *q, u32 max, int ta
     // #TODO: handle msg here
     u64 msg = ring->desc[idx];
     struct sk_buff *skb = (struct sk_buff *)msg;
-    if(skb!=NULL) {
-      if(tar == 0) {
+    if (skb != NULL) {
+      if (tar == 0) {
         // printk("to veth1\n");
         skb->dev = veth1;
       } else {
@@ -66,9 +78,29 @@ static inline u32 xskq_cons_read_desc_batch(struct xsk_queue *q, u32 max, int ta
   return nb_entries;
 }
 
+struct attach_if {
+  struct ring_info dev1_info;
+  struct ring_info dev2_info;
+};
+
 static long netdev_ioctl(struct file *file, unsigned int cmd,
                          unsigned long arg) {
   switch (cmd) {
+  case IOCTL_ATTACH_IF:
+    struct attach_if *if_info = (struct attach_if *)arg;
+    struct ring_info *to_dev1_info = (struct ring_info *)if_info;
+    struct ring_info *to_dev2_info = to_dev1_info + 1;
+    int ret = copy_to_user(to_dev1_info, &dev1_info, sizeof(struct ring_info));
+    if (ret) {
+      printk("copy_to_user failed %d \n", ret);
+      return -EFAULT;
+    }
+    ret = copy_to_user(to_dev2_info, &dev2_info, sizeof(struct ring_info));
+    if (ret) {
+      printk("copy_to_user failed %d \n", ret);
+      return -EFAULT;
+    }
+    break;
   case IOCTL_PING:
     // printk("Enter ping\n");
     struct xsk_queue *q = NULL;
@@ -103,15 +135,17 @@ static int netdev_mmap(struct file *filp, struct vm_area_struct *vma) {
   unsigned long size = vma->vm_end - vma->vm_start;
   struct xsk_queue *q = NULL;
 
-  if (offset == RX_RING_1_OFFSET) {
-    q = rx_ring1;
+  if (offset >= RX_RING_1_OFFSET && offset < TX_RING_1_OFFSET) {
+    int index = (offset - RX_RING_1_OFFSET) >> PAGE_SHIFT;
+    printk("offset: %lld shift %d map index: %d\n", (offset - RX_RING_1_OFFSET), PAGE_SHIFT, index);
+    q = rx_ring1[index];
   } else if (offset == TX_RING_1_OFFSET) {
-    printk("TX_RING_1_OFFSET\n");
     q = tx_ring1;
-  } else if (offset == RX_RING_2_OFFSET) {
-    q = rx_ring2;
+  } else if (offset >= RX_RING_2_OFFSET && offset < TX_RING_2_OFFSET) {
+    int index = (offset - RX_RING_2_OFFSET) >> PAGE_SHIFT;
+    printk("map index: %d\n", index);
+    q = rx_ring2[index];
   } else if (offset == TX_RING_2_OFFSET) {
-    printk("TX_RING_2_OFFSET\n");
     q = tx_ring2;
   }
 
@@ -130,30 +164,34 @@ static int netdev_mmap(struct file *filp, struct vm_area_struct *vma) {
 }
 
 static rx_handler_result_t veth_handle_frame(struct sk_buff **pskb) {
-    struct sk_buff *skb = *pskb;
+  int cpu_id;
+  cpu_id = smp_processor_id();
 
-    if (skb->dev == veth1) {
-        if(xskq_prod_reserve_addr(rx_ring1,(u64)skb)!=0) {
-            // printk("veth1 full\n");
-            kfree_skb(skb);
-        } else {
-            // printk("pass %lld to veth1\n",(u64)skb);
-            xskq_prod_submit(rx_ring1);
-        }
-    } else if (skb->dev == veth2) {
-        if(xskq_prod_reserve_addr(rx_ring2,(u64)skb)!=0) {
-            // printk("veth2 full\n");
-            kfree_skb(skb);
-        } else {
-            // printk("pass %lld to veth2\n",(u64)skb);
-            xskq_prod_submit(rx_ring2);
-        }
+  struct sk_buff *skb = *pskb;
+  if (skb->dev == veth1) {
+    if (xskq_prod_reserve_addr(rx_ring1[cpu_id], (u64)skb) != 0) {
+      // printk("veth1 full\n");
+      kfree_skb(skb);
     } else {
-        printk("PASS\n");
-        return RX_HANDLER_PASS;
+      // printk(KERN_INFO "Current CPU ID: %d\n", cpu_id);
+      // printk("pass %lld to veth1\n",(u64)skb);
+      xskq_prod_submit(rx_ring1[cpu_id]);
     }
+  } else if (skb->dev == veth2) {
+    if (xskq_prod_reserve_addr(rx_ring2[cpu_id], (u64)skb) != 0) {
+      // printk("veth2 full\n");
+      kfree_skb(skb);
+    } else {
+      // printk(KERN_INFO "Current CPU ID: %d\n", cpu_id);
+      // printk("pass %lld to veth2\n",(u64)skb);
+      xskq_prod_submit(rx_ring2[cpu_id]);
+    }
+  } else {
+    printk("PASS\n");
+    return RX_HANDLER_PASS;
+  }
 
-    return RX_HANDLER_CONSUMED;
+  return RX_HANDLER_CONSUMED;
 }
 
 static struct file_operations fops = {
@@ -164,27 +202,32 @@ static struct file_operations fops = {
     .mmap = netdev_mmap,
 };
 
+static void destory_queue(struct xsk_queue **q, int num) {
+  if (q) {
+    for (int i = 0; i < num; i++) {
+      if (q[i]) {
+        xskq_destroy(q[i]);
+      }
+    }
+  }
+}
+
 static int __init netdev_init(void) {
   dev_t dev;
   int ret;
 
-  // 分配字符设备编号
+  // Create character device
   ret = alloc_chrdev_region(&dev, 0, 1, DEVICE_NAME);
   if (ret < 0) {
     printk(KERN_ERR "Failed to allocate chrdev region\n");
     return ret;
   }
-
   major = MAJOR(dev);
-
-  // 创建字符设备类
   netdev_class = class_create(DEVICE_NAME);
   if (IS_ERR(netdev_class)) {
     unregister_chrdev_region(MKDEV(major, 0), 1);
     return PTR_ERR(netdev_class);
   }
-
-  // 创建字符设备
   cdev_init(&netdev_cdev, &fops);
   netdev_cdev.owner = THIS_MODULE;
   ret = cdev_add(&netdev_cdev, MKDEV(major, 0), 1);
@@ -193,47 +236,82 @@ static int __init netdev_init(void) {
     unregister_chrdev_region(MKDEV(major, 0), 1);
     return ret;
   }
-
-  // 创建设备节点
   device_create(netdev_class, NULL, MKDEV(major, 0), NULL, DEVICE_NAME);
 
   // Create queue
-  rx_ring1 = xskq_create(ENTRIES,1);
-  if (!rx_ring1) {
-    printk(KERN_ERR "Failed to create rx_ring1\n");
-    return -ENOMEM;
+  for (int i = 0; i < CORE_NUM; i++) {
+    rx_ring1[i] = xskq_create(ENTRIES, 1);
+    if (!rx_ring1[i]) {
+      ret = -ENOMEM;
+      printk(KERN_ERR "Failed to create rx_ring1\n");
+      goto err;
+    }
+    rx_ring2[i] = xskq_create(ENTRIES, 1);
+    if (!rx_ring2[i]) {
+      ret = -ENOMEM;
+      printk(KERN_ERR "Failed to create rx_ring2\n");
+      goto err;
+    }
   }
-  tx_ring1 = xskq_create(ENTRIES,2);
+  tx_ring1 = xskq_create(ENTRIES, 2);
   if (!tx_ring1) {
+    ret = -ENOMEM;
     printk(KERN_ERR "Failed to create tx_ring1\n");
-    return -ENOMEM;
+    goto err;
   }
-  rx_ring2 = xskq_create(ENTRIES,3);
-  if (!rx_ring2) {
-    printk(KERN_ERR "Failed to create rx_ring2\n");
-    return -ENOMEM;
-  }
-  tx_ring2 = xskq_create(ENTRIES,4);
+  tx_ring2 = xskq_create(ENTRIES, 4);
   if (!tx_ring2) {
+    ret = -ENOMEM;
     printk(KERN_ERR "Failed to create tx_ring2\n");
-    return -ENOMEM;
+    goto err;
   }
-  printk("Create queue succesfully!");
-  // Create veth
+
+  // Register rx handler
   veth1 = dev_get_by_name(&init_net, "veth1-br");
   veth2 = dev_get_by_name(&init_net, "veth2-br");
   if (!veth1 || !veth2) {
+    ret = -ENODEV;
     printk(KERN_ERR "Cannot find veth interfaces\n");
-    return -ENODEV;
+    goto err;
   }
   rtnl_lock();
   netdev_rx_handler_register(veth1, veth_handle_frame, NULL);
   netdev_rx_handler_register(veth2, veth_handle_frame, NULL);
   rtnl_unlock();
-  printk(KERN_INFO "veth driver loaded\n");
 
-  printk(KERN_INFO "netdev_ioctl module loaded\n");
+  // Set ring info
+  int ring_size = 0;
+  for (int i = 0; i < CORE_NUM; i++) {
+    ring_size += rx_ring1[i]->ring_vmalloc_size;
+  }
+  dev1_info.rx_ring_size = ring_size;
+  dev1_info.rx_ring_num = CORE_NUM;
+  ring_size = 0;
+  for (int i = 0; i < CORE_NUM; i++) {
+    ring_size += rx_ring2[i]->ring_vmalloc_size;
+  }
+  dev2_info.rx_ring_size = ring_size;
+  dev2_info.rx_ring_num = CORE_NUM;
+  dev1_info.tx_ring_size = tx_ring1->ring_vmalloc_size;
+  dev1_info.tx_ring_num = 1;
+  dev2_info.tx_ring_size = tx_ring2->ring_vmalloc_size;
+  dev2_info.tx_ring_num = 1;
+
+  printk(KERN_INFO "netdev_ioctl module loaded successfully\n");
+
   return 0;
+err:
+  device_destroy(netdev_class, MKDEV(major, 0));
+  class_destroy(netdev_class);
+  cdev_del(&netdev_cdev);
+  unregister_chrdev_region(MKDEV(major, 0), 1);
+  destory_queue(rx_ring1, CORE_NUM);
+  destory_queue(rx_ring2, CORE_NUM);
+  if (tx_ring1)
+    xskq_destroy(tx_ring1);
+  if (tx_ring2)
+    xskq_destroy(tx_ring2);
+  return ret;
 }
 
 static void __exit netdev_exit(void) {
@@ -243,12 +321,10 @@ static void __exit netdev_exit(void) {
   unregister_chrdev_region(MKDEV(major, 0), 1);
 
   // Destroy queue
-  if (rx_ring1)
-    xskq_destroy(rx_ring1);
+  destory_queue(rx_ring1, CORE_NUM);
+  destory_queue(rx_ring2, CORE_NUM);
   if (tx_ring1)
     xskq_destroy(tx_ring1);
-  if (rx_ring2)
-    xskq_destroy(rx_ring2);
   if (tx_ring2)
     xskq_destroy(tx_ring2);
 
