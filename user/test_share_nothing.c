@@ -206,30 +206,32 @@ int main(int argc, char *argv[]) {
   pthread_t threads_1_2[TX_NUM];
   struct forward_arg farg_1_2[TX_NUM];
   int start = 0;
-  int len = (CORE_NUM + TX_NUM - 1)/ TX_NUM;
+  int len = CORE_NUM / TX_NUM;
+  int remain = CORE_NUM % TX_NUM;
   for (int i = 0; i < TX_NUM; i++) {
     farg_1_2[i].cons_arr = rx_ring1_cons;
     farg_1_2[i].start = start;
-    farg_1_2[i].len = start + len >= CORE_NUM ? CORE_NUM - start : len;
+    farg_1_2[i].len = len + (i < remain ? 1 : 0);
     farg_1_2[i].prod = &tx_ring2_prod[i];
     farg_1_2[i].fd = fd;
     farg_1_2[i].send_index = ((unsigned long)1<<32) + i;
     pthread_create(&threads_1_2[i], NULL, thread_rx_func, &farg_1_2[i]);
-    start += len;
+    start += farg_1_2[i].len;
   }
   pthread_t threads_2_1[TX_NUM];
   struct forward_arg farg_2_1[TX_NUM];
   start = 0;
-  len = (CORE_NUM + TX_NUM - 1)/ TX_NUM;
+  len = CORE_NUM / TX_NUM;
+  remain = CORE_NUM % TX_NUM;
   for (int i = 0; i < TX_NUM; i++) {
     farg_2_1[i].cons_arr = rx_ring2_cons;
     farg_2_1[i].start = start;
-    farg_2_1[i].len = start + len >= CORE_NUM ? CORE_NUM - start : len;
+    farg_2_1[i].len = len + (i < remain ? 1 : 0);
     farg_2_1[i].prod = &tx_ring1_prod[i];
     farg_2_1[i].fd = fd;
     farg_2_1[i].send_index = ((unsigned long)0<<32) + i;
     pthread_create(&threads_2_1[i], NULL, thread_rx_func, &farg_2_1[i]);
-    start += len;
+    start += farg_2_1[i].len;
   }
   pthread_t threads_tx;
 
