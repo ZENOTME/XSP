@@ -24,19 +24,7 @@
 
 #define ENTRIES 4096
 #define CORE_NUM 28
-#define TX_NUM 1
-
-pthread_mutex_t lock;
-
-atomic_int tx_counter = 0;
-
-static inline void increment_counter() {
-    atomic_fetch_add(&tx_counter, 1);
-}
-
-static inline int reset_counter() {
-    return atomic_exchange(&tx_counter, 0);
-}
+#define TX_NUM 10
 
 struct ring_info {
   u64 rx_ring_size;
@@ -97,7 +85,11 @@ void simple_forward(struct xsk_ring_cons cons_arr[CORE_NUM], int start, int len,
       *addr_send = addr;
     }
     xsk_ring_prod__submit(prod, reserve);
-    increment_counter();
+    if (ioctl(fd, IOCTL_PING,send_index) < 0) {
+        perror("Failed to get interface index");
+        close(fd);
+        exit(EXIT_FAILURE);
+    }
   }
 }
 
@@ -107,23 +99,7 @@ void* thread_rx_func(void *arg) {
   int tar = farg->send_index >> 32;
   printf("tar: %d tx_id: %d start: %d, len: %d\n", tar, tx_id,farg->start,farg->len);
   while(1) {
-    // pthread_mutex_lock(&lock);
     simple_forward(farg->cons_arr, farg->start, farg->len, farg->prod, farg->fd, farg->send_index);
-    // pthread_mutex_unlock(&lock);
-  }
-}
-
-void* thread_tx_func(void *arg) {
-  int fd = (int)(unsigned long)arg;
-  while(1) {
-    int counter = reset_counter();
-    if (counter > 0) {
-      if (ioctl(fd, IOCTL_PING_ALL,0) < 0) {
-        perror("Failed to get interface index");
-        close(fd);
-        exit(EXIT_FAILURE);
-      }
-    }
   }
 }
 
@@ -131,16 +107,6 @@ struct single_arg {
   struct forward_arg* arg1;
   struct forward_arg* arg2;
 };
-
-void* thread_func_single(void *arg) {
-  struct single_arg *sarg = (struct single_arg *)arg;
-  while(1) {
-    for (int i = 0; i < TX_NUM; i++) {
-      simple_forward(sarg->arg1[i].cons_arr, sarg->arg1[i].start, sarg->arg1[i].len, sarg->arg1[i].prod, sarg->arg1[i].fd, sarg->arg1[i].send_index);
-      simple_forward(sarg->arg2[i].cons_arr, sarg->arg2[i].start, sarg->arg2[i].len, sarg->arg2[i].prod, sarg->arg2[i].fd, sarg->arg2[i].send_index);
-    }
-  }
-}
 
 struct attach_if attach;
 
@@ -237,23 +203,6 @@ int main(int argc, char *argv[]) {
     init_ring_cons(&rx_ring2_cons[i], rx_ring2[i]);
   }
 
-  /*
-
-  // while(1) {
-    // sleep(1);
-    // // printf("rx_ring1 prod: %d cons:
-  %d\n",rx_ring1->ptrs.producer,rx_ring1->ptrs.consumer);
-    // // printf("rx_ring1 prod: %d cons:
-  %d\n",*rx_ring1_cons.producer,*rx_ring1_cons.consumer);
-    // simple_forward(&rx_ring1_cons, &tx_ring2_prod, fd, 1);
-    // printf("rx_ring1 prod: %d cons:
-  %d\n",rx_ring1->ptrs.producer,rx_ring1->ptrs.consumer);
-    // simple_forward(&rx_ring2_cons, &tx_ring1_prod, fd, 0);
-  // }
-  */
-
-  pthread_mutex_init(&lock, NULL);
-
   pthread_t threads_1_2[TX_NUM];
   struct forward_arg farg_1_2[TX_NUM];
   int start = 0;
@@ -283,7 +232,6 @@ int main(int argc, char *argv[]) {
     start += len;
   }
   pthread_t threads_tx;
-  pthread_create(&threads_tx, NULL, thread_tx_func, (void *)(unsigned long)fd);
 
   // struct single_arg sarg;
   // sarg.arg1 = farg_1_2;
@@ -292,15 +240,11 @@ int main(int argc, char *argv[]) {
   // pthread_create(&thread_single, NULL, thread_func_single, &sarg);
   // pthread_join(thread_single, NULL);
 
-
-
   for (int i = 0; i < TX_NUM; i++) {
     pthread_join(threads_1_2[i], NULL);
     pthread_join(threads_2_1[i], NULL);
   }
   pthread_join(threads_tx, NULL);
-
-  pthread_mutex_destroy(&lock);
 
   close(fd);
 
