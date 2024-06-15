@@ -118,10 +118,8 @@ static inline u32 xskq_cons_read_desc_batch(struct xsk_queue *q, u32 max,
 
     if (tar == 0) {
       skb->dev = veth1;
-      printk("to vxlan\n");
     } else {
       skb->dev = veth2;
-      printk("to veth\n");
     }
     if (netpoll_tx_running(skb->dev)) {
       printk("fail xmit: dev busy\n");
