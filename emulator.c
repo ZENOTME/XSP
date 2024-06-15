@@ -113,20 +113,25 @@ static inline u32 xskq_cons_read_desc_batch(struct xsk_queue *q, u32 max,
 
     if (refcount_read(&skb->users) != 1) {
       printk("skb %lld ref %d error\n", (u64)skb, refcount_read(&skb->users));
-      // consume_skb(skb);
       continue;
     }
-    // skb_unref(skb);
 
-    if (netpoll_tx_running(skb->dev) || !is_skb_forwardable(skb->dev, skb)) {
-      consume_skb(skb);
-      printk("dev busy: fail to send\n");
-    } 
-    
     if (tar == 0) {
       skb->dev = veth1;
+      printk("to vxlan\n");
     } else {
       skb->dev = veth2;
+      printk("to veth\n");
+    }
+    if (netpoll_tx_running(skb->dev)) {
+      printk("fail xmit: dev busy\n");
+      consume_skb(skb);
+      continue;
+    }
+    if (!is_skb_forwardable(skb->dev, skb)) {
+      printk("fail forward: \n");
+      consume_skb(skb);
+      continue;
     }
     skb_push(skb, ETH_HLEN);
     int ret = dev_queue_xmit(skb);
@@ -250,36 +255,29 @@ static rx_handler_result_t veth_handle_frame(struct sk_buff **pskb) {
 
   struct sk_buff *skb = *pskb;
 
-  skb = skb_share_check(skb, GFP_ATOMIC);
-  if (!skb)
-    return RX_HANDLER_CONSUMED;
-  // skb_get(skb);
+  if (skb->dev == veth1 || skb->dev ==veth2) {
+    skb = skb_share_check(skb, GFP_ATOMIC);
+    if (!skb)
+      return RX_HANDLER_CONSUMED;
+  } else {
+    printk("PASS\n");
+    return RX_HANDLER_PASS;
+  }
 
   if (skb->dev == veth1) {
     if (xskq_prod_reserve_addr(rx_ring1[cpu_id], (u64)skb) != 0) {
-      // skb_unref(skb);
       consume_skb(skb);
-      // printk("fail to reserve addr\n");
     } else {
-      // printk(KERN_INFO "Current CPU ID: %d\n", cpu_id);
-      // printk("pass %lld to veth1 %d\n",(u64)skb,refcount_read(&skb->users));
-      // record_packet((u64)skb);
       xskq_prod_submit(rx_ring1[cpu_id]);
     }
   } else if (skb->dev == veth2) {
     if (xskq_prod_reserve_addr(rx_ring2[cpu_id], (u64)skb) != 0) {
-      // skb_unref(skb);
       consume_skb(skb);
-      // printk("fail to reserve addr\n");
     } else {
-      // printk(KERN_INFO "Current CPU ID: %d\n", cpu_id);
-      // printk("pass %lld to veth2 %d\n",(u64)skb,refcount_read(&skb->users));
-      // record_packet((u64)skb);
       xskq_prod_submit(rx_ring2[cpu_id]);
     }
   } else {
-    printk("PASS\n");
-    return RX_HANDLER_PASS;
+    printk("Never reach here");
   }
 
   return RX_HANDLER_CONSUMED;

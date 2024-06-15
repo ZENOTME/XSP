@@ -36,7 +36,7 @@ case $ACTION in
   sup)
     # 创建vxlan
     ip link add vxlan-demo type vxlan id 5001 remote $CLIENT_IP local $SERVER_IP dev $ETH_NAME dstport 4789
-    ip addr add
+    ip addr add 192.168.100.2/24 dev vxlan-demo
     ip link set up dev vxlan-demo
 
     ip netns add ns2
