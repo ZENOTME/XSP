@@ -1,0 +1,16 @@
+[
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-c",
+      "-Wall",
+      "-Wextra",
+      "-o",
+      "simple_test",
+      "simple_test.c"
+    ],
+    "directory": "/home/zenotme/Project/skb_forward/user",
+    "file": "/home/zenotme/Project/skb_forward/user/simple_test.c",
+    "output": "/home/zenotme/Project/skb_forward/user/simple_test"
+  }
+]
