@@ -1,8 +1,6 @@
 # XSP (Fast Skb Forwarding Kernel Module)
 
-XSP is a kernel module that provides a fast method for forwarding skb buffers between virtual Ethernet (veth) interfaces on a local machine.
-
-XSP is primarily used in network emulation environments to efficiently forward packets between different network namespaces. User can use it to replace with similar tool like tap.
+XSP is a kernel module that provides a fast method for forwarding skb buffers between virtual Ethernet (veth) interfaces on a local machine. It is primarily used in network emulation environments to efficiently forward packets between different network namespaces. User can use it to replace with similar tool like tap.
 
 # How to use it
 
@@ -18,30 +16,7 @@ XSP is primarily used in network emulation environments to efficiently forward p
 4. Trigger packet transmission
    Call the 'send' or 'send_all' ioctl to instruct the kernel to consume and transmit the skb_buffers in the TX ring buffer.
 
-## How It Works
-
-"dev name" -> dev
-dev -> { 
-   dev, 
-   rx [] queue {
-      offset,
-      queue,
-      info {
-         ring size,
-         ring num
-      }
-   },
-   tx [] queue {
-      offset,
-      queue,
-      info {
-         ring size,
-         ring num
-      }
-   }
-}
-offset -> queue
-
+See simple_** in user for more detail example.
 
 # TODO
 
