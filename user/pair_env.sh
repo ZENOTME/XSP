@@ -29,8 +29,8 @@ case $ACTION in
     ;;
   
   down)
-    ip link del veth1-br
-    ip link del veth2-br
+    ip link del veth1-brr
+    ip link del veth2-brr
 
     ip netns del ns1
     ip netns del ns2
