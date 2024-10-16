@@ -11,6 +11,7 @@
 #include <linux/netdevice.h>
 #include <linux/rtnetlink.h>
 #include <linux/veth.h>
+#include <linux/if_ether.h>
 
 bool xsp_handle_stop_flag = false;
 struct queue_array_list global_queue_array_list;
@@ -56,7 +57,18 @@ static rx_handler_result_t xsp_handle_frame(struct sk_buff **pskb) {
     return RX_HANDLER_CONSUMED;
   }
 
-  if (xspq_prod_reserve_addr(queue, (u64)skb) != 0) {
+  u64 src_mac = 0;
+  u64 dst_mac = 0;
+
+  if (unlikely(!pskb_may_pull(skb, sizeof(struct ethhdr)))) {
+    pr_warn("skb does not contain a complete ethernet header, pass\n");
+    return RX_HANDLER_PASS;
+  }
+  struct ethhdr *eth = eth_hdr(skb);
+  memcpy(&src_mac, eth->h_source, ETH_ALEN);
+  memcpy(&dst_mac, eth->h_dest, ETH_ALEN);
+
+  if (xspq_prod_reserve_addr(queue, (u64)skb, src_mac, dst_mac) != 0) {
     pr_warn("fail to reserve addr, drop skb");
     consume_skb(skb);
   } else {

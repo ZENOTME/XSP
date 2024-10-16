@@ -14,6 +14,12 @@
 #include <linux/types.h>
 #include <linux/vmalloc.h>
 
+struct ring_entry {
+  u64 addr;
+  u64 src_mac;
+  u64 dst_mac;
+};
+
 struct xsp_ring {
   u32 producer __attribute__((__aligned__((1 << (6)))));
   /* Hinder the adjacent cache prefetcher to prefetch the consumer
@@ -29,7 +35,7 @@ struct xsp_ring {
 
 struct xsp_ring_buffer {
   struct xsp_ring ptrs;
-  u64 addrs[] __attribute__((__aligned__((1 << (6)))));
+  struct ring_entry addrs[] __attribute__((__aligned__((1 << (6)))));
 };
 
 struct xsp_queue {
@@ -112,7 +118,7 @@ static inline void __xspq_cons_read_addr_unchecked(struct xsp_queue *q,
   struct xsp_ring_buffer *ring = (struct xsp_ring_buffer *)q->addrs;
   u32 idx = cached_cons & q->ring_mask;
 
-  *addr = ring->addrs[idx];
+  *addr = ring->addrs[idx].addr;
 }
 
 static inline bool xspq_cons_read_addr_unchecked(struct xsp_queue *q,
@@ -172,14 +178,20 @@ static inline bool xspq_prod_is_full(struct xsp_queue *q) {
   return xspq_prod_nb_free(q, 1) ? false : true;
 }
 
-static inline int xspq_prod_reserve_addr(struct xsp_queue *q, u64 addr) {
+static inline int xspq_prod_reserve_addr(struct xsp_queue *q, u64 addr,
+                                         u64 src_mac, u64 dst_mac) {
   struct xsp_ring_buffer *ring = (struct xsp_ring_buffer *)q->addrs;
 
   if (xspq_prod_is_full(q))
     return -ENOSPC;
 
   /* A, matches D */
-  ring->addrs[q->cached_prod++ & q->ring_mask] = addr;
+  u32 ori_cached_prod = q->cached_prod;
+  ring->addrs[ori_cached_prod & q->ring_mask].addr = addr;
+  ring->addrs[ori_cached_prod & q->ring_mask].src_mac = src_mac;
+  ring->addrs[ori_cached_prod & q->ring_mask].dst_mac = dst_mac;
+  q->cached_prod++;
+
   return 0;
 }
 
@@ -221,6 +233,8 @@ struct xsp_queue *xspq_create(u32 nentries) {
   q->ring_mask = nentries - 1;
 
   size = xspq_get_ring_size(q);
+
+  printk(KERN_INFO "size: %zu\n", size);
 
   /* size which is overflowing or close to SIZE_MAX will become 0 in
    * PAGE_ALIGN(), checking SIZE_MAX is enough due to the previous

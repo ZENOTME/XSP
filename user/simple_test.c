@@ -142,6 +142,15 @@ err:
   return -1;
 }
 
+void print_mac_address(u64 mac_addr, char *prefix) {
+  unsigned char mac[6];
+  for (int i = 0; i < 6; i++) {
+    mac[i] = (mac_addr >> (5 - i) * 8) & 0xFF;
+  }
+  printf("%s MAC Address: %02x:%02x:%02x:%02x:%02x:%02x\n", prefix, mac[0],
+         mac[1], mac[2], mac[3], mac[4], mac[5]);
+}
+
 static inline int receive_pkt(uint64_t *buffer, uint64_t start_idx,
                               uint64_t max_size, struct xsp_queue *queue) {
   uint32_t idx = 0;
@@ -150,8 +159,10 @@ static inline int receive_pkt(uint64_t *buffer, uint64_t start_idx,
   if (avail_receive > 0) {
     reserve = xsp_ring_cons__peek(queue, avail_receive, &idx);
     for (int i = 0; i < reserve; i++) {
-      u64 addr = *xsp_ring_cons__comp_addr(queue, idx + i);
-      buffer[start_idx++] = addr;
+      const struct ring_entry *entry = xsp_ring_cons__comp_addr(queue, idx + i);
+      buffer[start_idx++] = entry->addr;
+      // print_mac_address(entry->src_mac, "src");
+      // print_mac_address(entry->dst_mac, "dst");
     }
     xsp_ring_cons__release(queue, reserve);
   }
@@ -167,8 +178,8 @@ static inline int send_pkt(uint64_t *buffer, uint64_t start_idx,
   }
   for (int i = 0; i < reserve; i++) {
     u64 addr = buffer[start_idx + i];
-    u64 *addr_send = xsp_ring_prod__fill_addr(queue, idx + i);
-    *addr_send = addr;
+    struct ring_entry *entry = xsp_ring_prod__fill_addr(queue, idx + i);
+    entry->addr = addr;
   }
   xsp_ring_prod__submit(queue, reserve);
   return reserve;

@@ -10,6 +10,7 @@ static int __init queue_test_init(void) {
   struct xsp_queue *queue;
   u64 addr1, addr2;
   int ret;
+  u32 consumer_count;
 
   printk(KERN_INFO "Initializing queue test module\n");
 
@@ -19,7 +20,7 @@ static int __init queue_test_init(void) {
     return -ENOMEM;
   }
 
-  ret = xspq_prod_reserve_addr(queue, 0x12345678);
+  ret = xspq_prod_reserve_addr(queue, 0x12345678, 1, 2);
   if (ret) {
     printk(KERN_ERR "Failed to reserve first address in queue\n");
     xspq_destroy(queue);
@@ -27,7 +28,7 @@ static int __init queue_test_init(void) {
   }
   xspq_prod_submit(queue);
 
-  ret = xspq_prod_reserve_addr(queue, 0x87654321);
+  ret = xspq_prod_reserve_addr(queue, 0x87654321, 3, 4);
   if (ret) {
     printk(KERN_ERR "Failed to reserve second address in queue\n");
     xspq_destroy(queue);
@@ -35,8 +36,9 @@ static int __init queue_test_init(void) {
   }
   xspq_prod_submit(queue);
 
-  if (xspq_cons_nb_entries(queue, 4) != 2) {
-    printk(KERN_ERR "Consumer count is not 2\n");
+  consumer_count = xspq_cons_nb_entries(queue, 4);
+  if (consumer_count != 2) {
+    printk(KERN_ERR "Consumer count %u is not 2\n", consumer_count);
     xspq_destroy(queue);
     return -EINVAL;
   }
@@ -54,7 +56,7 @@ static int __init queue_test_init(void) {
 
   xspq_cons_release(queue);
 
-  u32 consumer_count = xspq_cons_nb_entries(queue, 4);
+  consumer_count = xspq_cons_nb_entries(queue, 4);
   if (consumer_count != 0) {
     printk(KERN_ERR "Consumer count: %u != 0\n", consumer_count);
   }

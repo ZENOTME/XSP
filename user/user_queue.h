@@ -23,10 +23,16 @@ struct xsp_ring {
   u32 pad3 __attribute__((__aligned__((1 << (6)))));
 };
 
+struct ring_entry {
+  u64 addr;
+  u64 src_mac;
+  u64 dst_mac;
+};
+
 /* Used for the fill and completion queues for buffers */
 struct xsp_ring_buffer {
   struct xsp_ring ptrs;
-  u64 addrs[] __attribute__((__aligned__((1 << (6)))));
+  struct ring_entry addrs[] __attribute__((__aligned__((1 << (6)))));
 };
 
 struct xsp_queue {
@@ -50,8 +56,8 @@ static void init_xsp_queue(struct xsp_queue *queue,
   queue->addrs = ring->addrs;
 }
 
-static inline u64 *xsp_ring_prod__fill_addr(struct xsp_queue *fill, u32 idx) {
-  u64 *addrs = (u64 *)fill->addrs;
+static inline struct ring_entry *xsp_ring_prod__fill_addr(struct xsp_queue *fill, u32 idx) {
+  struct ring_entry *addrs = (struct ring_entry *)fill->addrs;
 
   return &addrs[idx & fill->mask];
 }
@@ -89,11 +95,11 @@ static inline void xsp_ring_prod__submit(struct xsp_queue *prod, size_t nb) {
   *prod->producer += nb;
 }
 
-static inline const u64 *xsp_ring_cons__comp_addr(const struct xsp_queue *comp,
+static inline const struct ring_entry *xsp_ring_cons__comp_addr(const struct xsp_queue *comp,
                                                   u32 idx) {
   smp_rmb();
 
-  const u64 *addrs = (const u64 *)comp->addrs;
+  const struct ring_entry *addrs = (const struct ring_entry *)comp->addrs;
 
   return &addrs[idx & comp->mask];
 }
