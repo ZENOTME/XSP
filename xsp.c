@@ -73,9 +73,6 @@ static rx_handler_result_t xsp_handle_frame(struct sk_buff **pskb) {
     consume_skb(skb);
   } else {
     xspq_prod_submit(queue);
-    pr_info("submit successfully: cpu: %d prod num: %lu (%u - %u)", cpu_id,
-            xspq_prod_num(queue), READ_ONCE(queue->addrs->producer),
-            READ_ONCE(queue->addrs->consumer));
   }
 
   return RX_HANDLER_CONSUMED;
