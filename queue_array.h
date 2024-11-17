@@ -3,7 +3,7 @@
 
 #define QUEUE_ENTRY_NUM 4096
 
-#define FOR_EACH_QUEUE(queue_array, i)                                  \
+#define FOR_EACH_QUEUE(queue_array, i)                                         \
   for (size_t i = 0; i < queue_array->size; i++)
 
 struct queue_array {
@@ -89,11 +89,19 @@ inline void queue_array_list_insert(struct queue_array_list *array_list,
 
 inline void queue_array_list_destroy(struct queue_array_list *array_list) {
   struct queue_array_list_entry *entry, *tmp;
+  LIST_HEAD(to_free_list);
+
+  // move out all elements in atomic context
   spin_lock(&(array_list->lock));
   list_for_each_entry_safe(entry, tmp, &(array_list->list), list) {
     list_del(&(entry->list));
+    list_add_tail(&(entry->list), &to_free_list);
+  }
+  spin_unlock(&(array_list->lock));
+
+  // destory them
+  list_for_each_entry_safe(entry, tmp, &to_free_list, list) {
     queue_array_destroy(entry->queue);
     kfree(entry);
   }
-  spin_unlock(&(array_list->lock));
 }

@@ -5,15 +5,14 @@
 #include "queue_array.h"
 #include "xsp_queue.h"
 #include <linux/fs.h>
+#include <linux/if_ether.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/netdevice.h>
 #include <linux/rtnetlink.h>
 #include <linux/veth.h>
-#include <linux/if_ether.h>
 
-bool xsp_handle_stop_flag = false;
 struct queue_array_list global_queue_array_list;
 struct offset_queue_table global_offset_queue_table;
 struct dev_queue_table global_dev_queue_table;
@@ -22,12 +21,6 @@ static rx_handler_result_t xsp_handle_frame(struct sk_buff **pskb) {
   struct sk_buff *skb = *pskb;
   struct queue_array *rx_queue_array = NULL;
   struct net_device *dev = skb->dev;
-
-  // todo:
-  // module has exit. fix this
-  if (xsp_handle_stop_flag) {
-    return RX_HANDLER_PASS;
-  }
 
   // todo:
   // do we relly need this?
@@ -210,6 +203,8 @@ static int bind_dev(void *user_info_addr) {
   if (ret) {
     pr_err("copy_to_user failed %d \n", ret);
   }
+
+  pr_info("bind dev %s successfully\n", info.dev_name);
   return ret;
 }
 
@@ -319,6 +314,25 @@ static int __init xsp_init(void) {
 }
 
 static void __exit xsp_exit(void) {
+  // # TODO
+  // Prevent other operation to execute here so that we can destory resource
+  // safely.
+
+  // Unregister rx handler
+  struct dev_queue_entry *entry = NULL;
+  struct hlist_node *tmp;
+  for (int i = 0; i < DEV_QUEUE_TABLE_SIZE; i++) {
+    hlist_for_each_entry_safe(entry, tmp, &global_dev_queue_table.buckets[i],
+                              hlist_node) {
+      rtnl_lock();
+      netdev_rx_handler_unregister(entry->dev);
+      rtnl_unlock();
+      dev_put(entry->dev);
+      pr_info("Unregister device rx handler%s\n", entry->dev->name);
+    }
+  }
+
+  // Destory device
   device_destroy(xspdev_class, MKDEV(major, 0));
   class_destroy(xspdev_class);
   cdev_del(&xspdev_cdev);
@@ -326,20 +340,6 @@ static void __exit xsp_exit(void) {
 
   // Destroy queue
   queue_array_list_destroy(&global_queue_array_list);
-
-  // Unregister rx handler
-  rtnl_lock();
-  rcu_read_lock();
-  struct dev_queue_entry *entry = NULL;
-  for (int i = 0; i < DEV_QUEUE_TABLE_SIZE; i++) {
-    hlist_for_each_entry_rcu(entry, &global_dev_queue_table.buckets[i],
-                             hlist_node) {
-      dev_put(entry->dev);
-    }
-  }
-  rcu_read_unlock();
-  rtnl_unlock();
-  xsp_handle_stop_flag = true;
 
   // Clear table
   dev_queue_table_clear(&global_dev_queue_table);
