@@ -12,7 +12,7 @@
 // <->
 // forward thread <- [ packet thread * num ]
 
-#define NUM_PACKET_THREAD 4
+#define NUM_PACKET_THREAD 8
 
 struct forward_task {
   int fd;
@@ -129,13 +129,15 @@ int main(int argc, char *argv[]) {
     dev2_tasks[i].fd = fd;
   }
   for (int i = 0; i < dev1_result.rx_queue_num;) {
-    for (int j = 0; j < NUM_PACKET_THREAD; j++) {
+    for (int j = 0; j < NUM_PACKET_THREAD && i < dev2_result.rx_queue_num;
+         j++) {
       dev1_tasks[j].rx_queues[dev1_tasks[j].rx_queue_size++] =
           dev1_result.rx_queue[i++];
     }
   }
   for (int i = 0; i < dev2_result.rx_queue_num;) {
-    for (int j = 0; j < NUM_PACKET_THREAD; j++) {
+    for (int j = 0; j < NUM_PACKET_THREAD && i < dev2_result.rx_queue_num;
+         j++) {
       dev2_tasks[j].rx_queues[dev2_tasks[j].rx_queue_size++] =
           dev2_result.rx_queue[i++];
     }
