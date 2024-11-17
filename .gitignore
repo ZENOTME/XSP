@@ -5,3 +5,4 @@ Module.symvers
 modules.order
 compile_commands.json
 user/compile_commands.json
+rust_user/target

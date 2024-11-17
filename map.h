@@ -142,6 +142,8 @@ void offset_queue_table_clear(struct offset_queue_table *table);
 
 static inline loff_t offset_queue_fetch_next(struct offset_queue_table *table,
                                              size_t queue_num) {
+  // The index is shifted left by PAGE_SHIFT because it will be used as the mmap
+  // offset parameter which needs to be in page units.
   return atomic64_fetch_add(queue_num, &table->next_index) << PAGE_SHIFT;
 }
 

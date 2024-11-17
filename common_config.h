@@ -1,8 +1,11 @@
+#ifndef __COMMON_CONFIG_H__
+#define __COMMON_CONFIG_H__
+
 #define DEVICE_NAME "xsp"
 #define CORE_NUM 28
 #define IOCTL_BIND_DEV _IOW('x', 1, struct bind_dev_info)
-#define IOCTL_SEND _IOW('x', 2, u64)
-#define IOCTL_SEND_ALL _IOW('x', 4, u64)
+#define IOCTL_SEND _IOW('x', 2, uint64_t)
+#define IOCTL_SEND_ALL _IOW('x', 4, uint64_t)
 
 struct bind_dev_info {
     // in argument
@@ -18,3 +21,5 @@ struct bind_dev_info {
     unsigned long tx_queue_num;
     unsigned long tx_queue_size;
 };
+
+#endif
